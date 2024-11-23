@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections;
-using System.Threading;
 using Unity.WebRTC;
 using UnityEngine;
+using UnityEngine.Android;
 using WebRTCTutorial.DTO;
 
 namespace WebRTCTutorial
@@ -10,33 +10,121 @@ namespace WebRTCTutorial
     public class VideoManager : MonoBehaviour
     {
         public event Action<Texture> RemoteVideoReceived;
-
-        public bool CanConnect
-            => _peerConnection?.ConnectionState == RTCPeerConnectionState.New ||
-               _peerConnection?.ConnectionState == RTCPeerConnectionState.Disconnected;
-
+        public bool CanConnect = true;
         public bool IsConnected => _peerConnection?.ConnectionState == RTCPeerConnectionState.Connecting;
 
+        private WebSocketClient _webSocketClient;
+        private RTCPeerConnection _peerConnection;
+
+        // Android에서 카메라 권한을 요청하는 메서드 추가
+        private void RequestCameraPermission()
+        {
+            if (!Permission.HasUserAuthorizedPermission(Permission.Camera))
+            {
+                Permission.RequestUserPermission(Permission.Camera);
+            }
+        }
+
+        // Unity의 Awake 메서드에서 카메라 권한 요청 추가
+        protected void Awake()
+        {
+            // 필요에 따라 코덱을 초기화
+      
+
+            Debug.Log("Awake Called");
+
+            // Android에서 카메라 권한 요청
+            if (Application.platform == RuntimePlatform.Android)
+            {
+                RequestCameraPermission();
+            }
+
+            // WebSocketClient 찾기 (FindObjectOfType는 데모용으로 사용)
+            _webSocketClient = FindObjectOfType<WebSocketClient>();
+
+            StartCoroutine(WebRTC.Update());
+
+            // RTCConfiguration 설정
+            var config = new RTCConfiguration
+            {
+                iceServers = new RTCIceServer[]
+                {
+                    new RTCIceServer
+                    {
+                        urls = new string[] { "stun:stun.l.google.com:19302" } // Google STUN 서버
+                    }
+                },
+            };
+            Debug.Log($"videoManager");
+            // _peerConnection 생성
+            _peerConnection = new RTCPeerConnection(ref config);
+            if (_peerConnection == null)
+            {
+                Debug.LogError("Failed to create RTCPeerConnection.");
+                return;
+            }
+
+            Debug.Log($"Initial ConnectionState: {_peerConnection.ConnectionState}");
+            Debug.Log($"videoManagerAwake");
+            // 이벤트 핸들러 설정
+            _peerConnection.OnNegotiationNeeded += OnNegotiationNeeded;
+            _peerConnection.OnIceCandidate += OnIceCandidate;
+            _peerConnection.OnTrack += OnTrack;
+            _webSocketClient.MessageReceived += OnWebSocketMessageReceived;
+        }
+
+        // SetActiveCamera: WebCamTexture를 사용하여 카메라 트랙을 설정
         public void SetActiveCamera(WebCamTexture activeWebCamTexture)
         {
-            // Remove previous track
+            // 이전 트랙 제거
             var senders = _peerConnection.GetSenders();
             foreach (var sender in senders)
             {
                 _peerConnection.RemoveTrack(sender);
             }
 
+            // 새로운 비디오 트랙 추가
             var videoTrack = new VideoStreamTrack(activeWebCamTexture);
             _peerConnection.AddTrack(videoTrack);
-            
+
             Debug.Log("Sender video track was set");
         }
 
+        // 연결을 시작하는 메서드
         public void Connect()
         {
-            StartCoroutine(CreateAndSendLocalSdpOffer());
+            // _peerConnection이 null이라면 초기화
+            if (_peerConnection == null)
+            {
+                Debug.LogError("_peerConnection is null, attempting to reinitialize.");
+                var config = new RTCConfiguration
+                {
+                    iceServers = new RTCIceServer[]
+                    {
+                        new RTCIceServer { urls = new string[] { "stun:stun.l.google.com:19302" } }
+                    }
+                };
+
+                _peerConnection = new RTCPeerConnection(ref config);
+                if (_peerConnection == null)
+                {
+                    Debug.LogError("Failed to reinitialize RTCPeerConnection.");
+                    return;
+                }
+            }
+
+            // 연결을 시도하기 전에 _peerConnection이 null이 아닌지 확인
+            if (_peerConnection != null)
+            {
+                StartCoroutine(CreateAndSendLocalSdpOffer());
+            }
+            else
+            {
+                Debug.LogError("_peerConnection is null after reinitialization.");
+            }
         }
 
+        // 연결을 종료하는 메서드
         public void Disconnect()
         {
             if (!IsConnected)
@@ -46,63 +134,19 @@ namespace WebRTCTutorial
 
             _peerConnection.Close();
             _peerConnection.Dispose();
+            _peerConnection = null; // Disconnect 후 _peerConnection을 null로 설정
         }
 
-        // Called by Unity -> https://docs.unity3d.com/ScriptReference/MonoBehaviour.Awake.html
-        protected void Awake()
-        {
-            // FindObjectOfType is used for the demo purpose only. In a real production it's better to avoid it for performance reasons
-            _webSocketClient = FindObjectOfType<WebSocketClient>();
-
-            StartCoroutine(WebRTC.Update());
-
-            var config = new RTCConfiguration
-            {
-                iceServers = new RTCIceServer[]
-                {
-                    new RTCIceServer
-                    {
-                        urls = new string[]
-                        {
-                            // Google Stun server
-                            "stun:stun.l.google.com:19302"
-                        },
-                    }
-                },
-            };
-
-            _peerConnection = new RTCPeerConnection(ref config);
-
-            // "Negotiation" is the exchange of SDP Offer/Answer. Peers describe what media they want to send and agree on, for example, what codecs to use
-            // In this tutorial we exchange the SDP Offer/Answer only once when connecting.
-            // But in a real production you'd have to repeat the exchange every time the OnNegotiationNeeded event is triggered
-            _peerConnection.OnNegotiationNeeded += OnNegotiationNeeded;
-
-            // Triggered when a new network endpoint is found that could potentially be used to establish the connection
-            _peerConnection.OnIceCandidate += OnIceCandidate;
-
-            // Triggered when a new track is received
-            _peerConnection.OnTrack += OnTrack;
-
-            // Triggered when a new message is received from the other peer via WebSocket
-            _webSocketClient.MessageReceived += OnWebSocketMessageReceived;
-        }
-
-        private WebSocketClient _webSocketClient;
-        private RTCPeerConnection _peerConnection;
-
+        // WebRTC 이벤트 핸들러들
         private void OnTrack(RTCTrackEvent trackEvent)
         {
-            Debug.Log("OnTrack received, type: " + trackEvent.Track.Kind);
-
             if (trackEvent.Track is VideoStreamTrack videoStreamTrack)
             {
                 videoStreamTrack.OnVideoReceived += OnVideoReceived;
             }
             else
             {
-                Debug.LogError(
-                    $"Unhandled track of type: {trackEvent.Track.GetType()}. In this tutorial, we're handling only video tracks.");
+                Debug.LogError($"Unhandled track of type: {trackEvent.Track.GetType()}. Only video tracks are handled.");
             }
         }
 
@@ -114,13 +158,13 @@ namespace WebRTCTutorial
 
         private void OnNegotiationNeeded()
         {
-            Debug.Log("SDP Offer <-> Answer exchange requested by the webRTC client.");
+            Debug.Log("Negotiation needed.");
         }
 
         private void OnIceCandidate(RTCIceCandidate candidate)
         {
             SendIceCandidateToOtherPeer(candidate);
-            Debug.Log("Sent Ice Candidate to the other peer THREAD  " + Thread.CurrentThread.ManagedThreadId);
+            Debug.Log("Sent Ice Candidate to the other peer");
         }
 
         private void OnWebSocketMessageReceived(string message)
@@ -129,7 +173,6 @@ namespace WebRTCTutorial
             switch ((DtoType)dtoWrapper.Type)
             {
                 case DtoType.ICE:
-
                     var iceDto = JsonUtility.FromJson<ICECanddidateDTO>(dtoWrapper.Payload);
                     var ice = new RTCIceCandidate(new RTCIceCandidateInit
                     {
@@ -140,10 +183,8 @@ namespace WebRTCTutorial
 
                     _peerConnection.AddIceCandidate(ice);
                     Debug.Log($"Received ICE Candidate: {ice.Candidate}");
-
                     break;
                 case DtoType.SDP:
-
                     var sdpDto = JsonUtility.FromJson<SdpDTO>(dtoWrapper.Payload);
                     var sdp = new RTCSessionDescription
                     {
@@ -162,9 +203,8 @@ namespace WebRTCTutorial
                             StartCoroutine(OnRemoteSdpAnswerReceived(sdp));
                             break;
                         default:
-                            throw new ArgumentOutOfRangeException("Unhandled type of SDP message: " + sdp.type);
+                            throw new ArgumentOutOfRangeException($"Unhandled type of SDP message: {sdp.type}");
                     }
-
                     break;
                 default:
                     throw new ArgumentOutOfRangeException();
@@ -196,6 +236,12 @@ namespace WebRTCTutorial
 
         private void SendMessageToOtherPeer<TType>(TType obj, DtoType type)
         {
+            if (_webSocketClient == null)
+            {
+                Debug.LogError("_webSocketClient is null.");
+                return;
+            }
+
             try
             {
                 var serializedPayload = JsonUtility.ToJson(obj);
@@ -218,7 +264,13 @@ namespace WebRTCTutorial
 
         private IEnumerator CreateAndSendLocalSdpOffer()
         {
-            // 1. Create local SDP offer
+            if (_peerConnection == null)
+            {
+                Debug.LogError("_peerConnection is null.");
+                yield break;
+            }
+
+            // 1. 로컬 SDP offer 생성
             var createOfferOperation = _peerConnection.CreateOffer();
             yield return createOfferOperation;
 
@@ -230,36 +282,38 @@ namespace WebRTCTutorial
 
             var sdpOffer = createOfferOperation.Desc;
 
-            // 2. Set the offer as a local SDP 
-            var setLocalSdpOperation = _peerConnection.SetLocalDescription(ref sdpOffer);
-            yield return setLocalSdpOperation;
+            // 2. offer를 로컬 SDP로 설정
+            var setLocalDescOperation = _peerConnection.SetLocalDescription(ref sdpOffer);
+            yield return setLocalDescOperation;
 
-            if (setLocalSdpOperation.IsError)
+            if (setLocalDescOperation.IsError)
             {
                 Debug.LogError("Failed to set local description");
                 yield break;
             }
 
-            // 3. Send the SDP Offer to the other Peer
+            // 3. 상대방에게 offer 전송
             SendSdpToOtherPeer(sdpOffer);
-            Debug.Log("Sent Sdp Offer");
         }
 
-        private IEnumerator OnRemoteSdpOfferReceived(RTCSessionDescription remoteSdpOffer)
+        private IEnumerator OnRemoteSdpOfferReceived(RTCSessionDescription sdp)
         {
-            Debug.Log("Remote SDP Offer received. Set as local offer and send back the generated answer");
+            if (_peerConnection == null)
+            {
+                Debug.LogError("_peerConnection is null.");
+                yield break;
+            }
 
-            // 1. Set the received offer as remote description
-            var setRemoteSdpOperation = _peerConnection.SetRemoteDescription(ref remoteSdpOffer);
-            yield return setRemoteSdpOperation;
+            var setRemoteDescOperation = _peerConnection.SetRemoteDescription(ref sdp);
+            yield return setRemoteDescOperation;
 
-            if (setRemoteSdpOperation.IsError)
+            if (setRemoteDescOperation.IsError)
             {
                 Debug.LogError("Failed to set remote description");
                 yield break;
             }
 
-            // 2. Generate Answer
+            // 응답을 위한 SDP answer 생성
             var createAnswerOperation = _peerConnection.CreateAnswer();
             yield return createAnswerOperation;
 
@@ -271,31 +325,35 @@ namespace WebRTCTutorial
 
             var sdpAnswer = createAnswerOperation.Desc;
 
-            // 3. Set the generated answer as local description
+            // 3. answer를 로컬 SDP로 설정
+            var setLocalDescOperation = _peerConnection.SetLocalDescription(ref sdpAnswer);
+            yield return setLocalDescOperation;
 
-            var setLocalDspOperation = _peerConnection.SetLocalDescription(ref sdpAnswer);
-            yield return setLocalDspOperation;
-
-            if (setLocalDspOperation.IsError)
+            if (setLocalDescOperation.IsError)
             {
                 Debug.LogError("Failed to set local description");
                 yield break;
             }
 
-            // 4. Send the answer to the other Peer
+            // 4. 상대방에게 answer 전송
             SendSdpToOtherPeer(sdpAnswer);
-            Debug.Log("Sent Sdp Answer");
         }
 
-        private IEnumerator OnRemoteSdpAnswerReceived(RTCSessionDescription remoteSdpAnswer)
+        private IEnumerator OnRemoteSdpAnswerReceived(RTCSessionDescription sdp)
         {
-            // 1. Set the received answer as remote description
-            var setRemoteSdpOperation = _peerConnection.SetRemoteDescription(ref remoteSdpAnswer);
-            yield return setRemoteSdpOperation;
+            if (_peerConnection == null)
+            {
+                Debug.LogError("_peerConnection is null.");
+                yield break;
+            }
 
-            if (setRemoteSdpOperation.IsError)
+            var setRemoteDescOperation = _peerConnection.SetRemoteDescription(ref sdp);
+            yield return setRemoteDescOperation;
+
+            if (setRemoteDescOperation.IsError)
             {
                 Debug.LogError("Failed to set remote description");
+                yield break;
             }
         }
     }

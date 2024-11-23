@@ -10,7 +10,7 @@ namespace WebRTCTutorial.UI
         public void SetVideoTexture(Texture texture)
         {
             _videoRender.texture = texture;
-            
+
             // Adjust the texture size to match the aspect ratio of the video
             var sourceAspectRatio = texture.width * 1f / texture.height;
 
@@ -19,7 +19,7 @@ namespace WebRTCTutorial.UI
 
             _videoRender.rectTransform.sizeDelta = adjustedSize;
         }
-        
+
 #if UNITY_EDITOR
         // Called by Unity https://docs.unity3d.com/ScriptReference/MonoBehaviour.OnValidate.html
         protected void OnValidate()
@@ -35,7 +35,7 @@ namespace WebRTCTutorial.UI
             }
         }
 #endif
-    
+
         [SerializeField]
         private RawImage _videoRender;
     }

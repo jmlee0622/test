@@ -4,6 +4,8 @@ using TMPro;
 using UnityEngine;
 using UnityEngine.Assertions;
 using UnityEngine.UI;
+using UnityEngine.Android;
+using Unity.WebRTC;
 
 namespace WebRTCTutorial.UI
 {
@@ -34,8 +36,15 @@ namespace WebRTCTutorial.UI
         // Called by Unity -> https://docs.unity3d.com/ScriptReference/MonoBehaviour.Awake.html
         protected void Awake()
         {
+            Debug.Log($"UiManager Awake");
             // FindObjectOfType is used for the demo purpose only. In a real production it's better to avoid it for performance reasons
             _videoManager = FindObjectOfType<VideoManager>();
+
+            // Android에서 카메라 권한 요청
+            if (Application.platform == RuntimePlatform.Android)
+            {
+                RequestCameraPermission();
+            }
 
             // Check if there's any camera device available
             if (WebCamTexture.devices.Length == 0)
@@ -63,6 +72,7 @@ namespace WebRTCTutorial.UI
 
             // Subscribe to when video from the other peer is received
             _videoManager.RemoteVideoReceived += OnRemoteVideoReceived;
+            Debug.Log($"UiManager Awake");
         }
 
         // Called by Unity -> https://docs.unity3d.com/ScriptReference/MonoBehaviour.Start.html
@@ -77,7 +87,6 @@ namespace WebRTCTutorial.UI
         protected void Update()
         {
             // Control buttons being clickable by the connection state
-            // In a real production code you may want to have this event driven instead of per frame operation
             _connectButton.interactable = _videoManager.CanConnect;
             _disconnectButton.interactable = _videoManager.IsConnected;
         }
@@ -101,6 +110,17 @@ namespace WebRTCTutorial.UI
 
         private VideoManager _videoManager;
 
+        private RTCPeerConnection _peerConnection; // Add the peer connection variable
+
+        // Android에서 카메라 권한을 요청하는 메서드
+        private void RequestCameraPermission()
+        {
+            if (!Permission.HasUserAuthorizedPermission(Permission.Camera))
+            {
+                Permission.RequestUserPermission(Permission.Camera);
+            }
+        }
+
         private void SetActiveCamera(int deviceIndex)
         {
             var deviceName = _cameraDropdown.options[deviceIndex].text;
@@ -111,11 +131,6 @@ namespace WebRTCTutorial.UI
                 _activeCamera.Stop();
             }
 
-            /* Depending on the platform you're targeting you may need to request permission to access the camera device:
-                - IOS or WebGL -> https://docs.unity3d.com/2022.3/Documentation/ScriptReference/Application.RequestUserAuthorization.html
-                - Android -> https://docs.unity3d.com/Manual/android-RequestingPermissions.html
-             */
-
             // Some platforms (like Android) require 16x16 alignment for the texture size to be sent via WebRTC
             _activeCamera = new WebCamTexture(deviceName, 1024, 768, requestedFPS: 30);
 
@@ -124,7 +139,7 @@ namespace WebRTCTutorial.UI
             // starting the camera might fail if the device is not accessible (e.g. used by another application)
             if (!_activeCamera.isPlaying)
             {
-                Debug.LogError($"Failed to start the `{deviceName}` camera device.");
+                Debug.LogError($"Failed to start the {deviceName} camera device.");
                 return;
             }
 
@@ -151,21 +166,63 @@ namespace WebRTCTutorial.UI
                     yield break;
                 }
             }
-            
-            // Set preview of the local peer
+
+            // Set preview of the local peer (Peer A) with the original camera texture
             _peerViewA.SetVideoTexture(_activeCamera);
+
+            // Set preview of the remote peer (Peer B) with the original camera texture
+            // _peerViewB.SetVideoTexture( /* Remote Video Texture */ );
+
+            // Rotate PeerView A and PeerView B GameObjects by 90 degrees on Y-axis
+            _peerViewA.transform.rotation = Quaternion.Euler(0, 0, 90); // Rotate 90 degrees on Y-axis
+            _peerViewB.transform.rotation = Quaternion.Euler(0, 0, 90); // Rotate 90 degrees on Y-axis
 
             // Notify Video Manager about new active camera device
             _videoManager.SetActiveCamera(_activeCamera);
+
+            // Check if peerConnection is null before proceeding
+            if (_peerConnection == null)
+            {
+                Debug.LogWarning("Peer connection is null. Initializing peer connection now.");
+                _peerConnection = new RTCPeerConnection(); // Initialize the peer connection here if null
+            }
         }
 
         private void OnRemoteVideoReceived(Texture texture)
         {
+            // OnRemoteVideoReceived에서 받은 텍스처를 그대로 전달
             _peerViewB.SetVideoTexture(texture);
+
+            // 피어 B의 게임 오브젝트도 90도 회전
+            _peerViewB.transform.rotation = Quaternion.Euler(0, 90, 0); // Rotate 90 degrees on Y-axis
         }
 
-        private void OnConnectButtonClicked() => _videoManager.Connect();
+        private void OnConnectButtonClicked()
+        {
+            // Ensure peerConnection is initialized
+            if (_peerConnection == null)
+            {
+                Debug.LogWarning("Peer connection is null, initializing fuck");
+                _peerConnection = new RTCPeerConnection(); // Ensure the peer connection is initialized
+                Debug.LogWarning("go go!!");
+            }
 
-        private void OnDisconnectButtonClicked() => _videoManager.Disconnect();
+            // Now try to connect
+            if (_videoManager.CanConnect)
+            {
+                Debug.LogWarning("connect");
+                _videoManager.Connect();  // Assuming _videoManager handles the actual connection logic
+            }
+            else
+            {
+                Debug.LogWarning("Cannot connect, please check the peer connection status.");
+            }
+        }
+
+
+        private void OnDisconnectButtonClicked()
+        {
+            _videoManager.Disconnect();
+        }
     }
 }
